@@ -344,7 +344,21 @@ def _segment_text_pure(
         
         if not chunk_text.strip():
             continue
-            
+
+        # --- 特殊处理：纯标点符号 ---
+        # 激进分段会产生独立的标点块（如 ","），单独发给 TTS 会报错
+        # 策略：将标点合并到前一个分段中
+        if all(S_PUNC.match(ch) for ch in chunk_text):
+            if all_spans:
+                # 合并到前一个段
+                all_spans[-1].text += chunk_text
+                all_spans[-1].end = chunk_end  # 扩展结束位置
+            else:
+                # 文本开头的标点？忽略或暂存等待后续合并
+                # 既然 TTS 讨厌标点，忽略开头的标点是安全的
+                pass
+            continue
+
         # 计算位置
         abs_start = chunk_start
         abs_end = chunk_end
