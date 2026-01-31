@@ -100,13 +100,23 @@ def resample_wav_bytes(
     """
     import torch
     import torchaudio
+    import soundfile as sf
     import io
+    import numpy as np
     
-    # 读取音频
+    # 1. 使用 soundfile 读取 (避免 torchaudio.load 的后端问题)
     bio = io.BytesIO(wav_bytes)
-    waveform, src_sr = torchaudio.load(bio)
+    # data shape: (frames, channels)
+    data, src_sr = sf.read(bio, dtype='float32')
     
-    # 1. 声道处理
+    # 转为 Tensor: (channels, frames)
+    waveform = torch.from_numpy(data)
+    if waveform.dim() == 1:
+        waveform = waveform.unsqueeze(0)  # (frames,) -> (1, frames)
+    else:
+        waveform = waveform.t()  # (frames, channels) -> (channels, frames)
+    
+    # 2. 声道处理
     if waveform.shape[0] != target_channels:
         if target_channels == 1:
             # 多转单：平均
@@ -115,19 +125,16 @@ def resample_wav_bytes(
             # 单转多：复制
             waveform = waveform.repeat(2, 1)
             
-    # 2. 重采样
+    # 3. 重采样
     if src_sr != target_sr:
         resampler = torchaudio.transforms.Resample(orig_freq=src_sr, new_freq=target_sr)
         waveform = resampler(waveform)
         
-    # 3. 导出为 WAV bytes
+    # 4. 导出为 WAV bytes (使用 soundfile)
     out_bio = io.BytesIO()
-    torchaudio.save(
-        out_bio, 
-        waveform, 
-        target_sr, 
-        encoding="PCM_S", 
-        bits_per_sample=target_width * 8,
-        format="wav"
-    )
+    # 转回 numpy: (frames, channels)
+    out_numpy = waveform.t().detach().numpy()
+    
+    # 确保保存为 16-bit PCM (PCM_16)
+    sf.write(out_bio, out_numpy, target_sr, format='WAV', subtype='PCM_16')
     return out_bio.getvalue()
