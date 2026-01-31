@@ -50,6 +50,90 @@ def _script_bucket(ch: str) -> str:
     return "OTHER"
 
 
+def _split_by_punctuation(text: str) -> List[Tuple[int, int]]:
+    """
+    基于标点符号分割句子边界（第一级分段）
+    
+    策略：
+    1. **主分隔符**（句号）：必定分割
+    2. **潜在分隔符**（逗号）：当前后脚本不同时分割
+    
+    解决问题：避免跨句子边界的语言误判
+    例如："...greeting me. 它会告诉我..." 
+         → 在句号处分割
+    例如："它会告诉我...，そして..." 
+         → 在逗号处分割（汉字 vs 假名）
+    
+    Args:
+        text: 输入文本
+    
+    Returns:
+        句子片段的 (start, end) 列表
+    """
+    if not text:
+        return []
+    
+    # 主分隔符（句子结束）
+    primary_delimiters = {
+        '。', '！', '？',  # 中文
+        '.', '!', '?',    # 英文
+        '．', '！', '？'  # 日文全角
+    }
+    
+    # 次级分隔符（可能是语言边界）
+    secondary_delimiters = {
+        '，', '、',       # 中文逗号、顿号
+        ',',             # 英文逗号
+        '，'             # 日文全角逗号
+    }
+    
+    segments = []
+    start = 0
+    
+    for i, ch in enumerate(text):
+        should_split = False
+        
+        # 主分隔符：总是分割
+        if ch in primary_delimiters:
+            should_split = True
+        
+        # 次级分隔符：检查前后脚本是否不同
+        elif ch in secondary_delimiters and i + 1 < len(text):
+            # 检查逗号后的字符
+            next_ch = text[i + 1]
+            
+            # 跳过空格
+            j = i + 1
+            while j < len(text) and text[j].isspace():
+                j += 1
+            
+            if j < len(text):
+                next_ch = text[j]
+                current_bucket = _script_bucket(text[i - 1] if i > 0 else ' ')
+                next_bucket = _script_bucket(next_ch)
+                
+                # 如果逗号前后脚本类型不同，且都不是NEUTRAL，则分割
+                if (current_bucket != next_bucket and 
+                    current_bucket != "NEUTRAL" and 
+                    next_bucket != "NEUTRAL"):
+                    should_split = True
+        
+        if should_split:
+            end = i + 1
+            seg_text = text[start:end].strip()
+            if seg_text:
+                segments.append((start, end))
+            start = end
+    
+    # 处理最后一段
+    if start < len(text):
+        seg_text = text[start:].strip()
+        if seg_text:
+            segments.append((start, len(text)))
+    
+    return segments if segments else [(0, len(text))]
+
+
 def _coarse_segments(text: str) -> List[Tuple[int, int]]:
     """粗略分段（基于脚本切换）"""
     if not text:
@@ -275,29 +359,56 @@ def _segment_text_pure(
     text: str, max_zh_len: int = 6, kana_pull: bool = True
 ) -> List[_Span]:
     """
-    执行完整的文本分段流程
+    执行完整的文本分段流程（两级分段策略）
+    
+    策略：
+    1. **第一级**：标点符号分割（句子边界）
+       → 避免跨句子的语言误判
+    2. **第二级**：脚本切换 + AI 检测（句内多语言）
+       → fastText 处理句内的中英日混合
     
     Args:
         text: 输入文本
-        max_zh_len: 日语粘合修正的最大中文段长度（提高到 6 以覆盖更多汉字词组）
+        max_zh_len: 日语粘合修正的最大中文段长度
         kana_pull: 是否启用假名牵引修正
     """
-    # 1) 粗分 + Lingua 判定（带上下文）
-    spans: List[_Span] = []
-    for s, e in _coarse_segments(text):
-        chunk = text[s:e]
-        scores = _scores_with_context(chunk, s, e, text)  # 使用上下文检测
-        lang = max(scores.items(), key=lambda kv: kv[1])[0]
-        spans.append(_Span(s, e, chunk, lang, scores))
-
-    # 2) 合并同语
-    spans = _merge_adjacent(spans)
-
-    # 3) 日语粘合修正（作为兜底机制）
-    spans = _smooth_ja_adhesion(spans, text, max_zh_len, kana_pull)
-
-    # 4) 再次合并
-    return _merge_adjacent(spans)
+    # ========== 第一级：标点符号分割 ==========
+    sentence_segments = _split_by_punctuation(text)
+    
+    all_spans: List[_Span] = []
+    
+    # 对每个句子片段进行第二级处理
+    for sent_start, sent_end in sentence_segments:
+        sentence = text[sent_start:sent_end]
+        
+        # ========== 第二级：脚本切换 + AI 检测 ==========
+        spans: List[_Span] = []
+        for s, e in _coarse_segments(sentence):
+            chunk = sentence[s:e]
+            
+            # 计算在原始文本中的位置
+            abs_start = sent_start + s
+            abs_end = sent_start + e
+            
+            # 使用 fastText AI 检测（带上下文）
+            scores = _scores_with_context(chunk, abs_start, abs_end, text)
+            lang = max(scores.items(), key=lambda kv: kv[1])[0]
+            
+            spans.append(_Span(abs_start, abs_end, chunk, lang, scores))
+        
+        # 句内合并同语
+        spans = _merge_adjacent(spans)
+        
+        # 句内日语粘合修正
+        spans = _smooth_ja_adhesion(spans, text, max_zh_len, kana_pull)
+        
+        # 再次合并
+        spans = _merge_adjacent(spans)
+        
+        all_spans.extend(spans)
+    
+    # 全局最后一次合并（跨句子边界的相同语言）
+    return _merge_adjacent(all_spans)
 
 
 # ---------- 公开 API ----------
