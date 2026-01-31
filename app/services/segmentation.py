@@ -415,28 +415,37 @@ def _segment_text_pure(
 @log_function()
 def segment_text(payload: TextIn) -> TextSegmentsOut:
     """
-    文本分段主接口
+    将输入文本按语言分段
     
     Args:
         payload: 包含待分段文本的输入
-        
+    
     Returns:
-        分段结果，包含各段落的语言和位置信息
+        分段结果，包含各段的文本、语言代码、起止位置
     """
     text = payload.text
     spans = _segment_text_pure(text)
-
-    # 构造输出
-    seg_items: List[SegmentItem] = []
-    present = set()
-    for sp in spans:
-        lang: LangCode = sp.lang  # type: ignore
-        seg_items.append(
-            SegmentItem(start=sp.start, end=sp.end, langcode=lang, text=sp.text)
+    
+    # 过滤掉空白片段（防止 TTS 引擎报错）
+    spans = [s for s in spans if s.text.strip()]
+    
+    # 转换为输出格式
+    segments = [
+        SegmentItem(
+            text=sp.text,
+            langcode=sp.lang,  # sp.lang 已经是 'zh'/'ja'/'en' 字符串
+            start=sp.start,
+            end=sp.end,
         )
-        present.add(lang)
-
-    # contain_lang 固定顺序（只包含出现过的）
-    ordered = [l for l in ["en", "zh", "ja"] if l in present]
-
-    return TextSegmentsOut(contain_lang=ordered, segments=seg_items)
+        for sp in spans
+    ]
+    
+    # 提取包含的语言列表（去重并保持顺序）
+    seen = set()
+    contain_lang = []
+    for seg in segments:
+        if seg.langcode not in seen:
+            seen.add(seg.langcode)
+            contain_lang.append(seg.langcode)
+    
+    return TextSegmentsOut(segments=segments, contain_lang=contain_lang)
