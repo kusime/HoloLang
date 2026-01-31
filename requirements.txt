@@ -2,11 +2,18 @@
 # 从 holo-align 环境导出，使用兼容版本号
 
 # ========== Web 框架 ==========
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
-
-# ========== 数据验证 ==========
-pydantic>=2.0.0
+fastapi[all]==0.112.4
+uvicorn[standard]==0.31.0
+boto3==1.35.23
+python-multipart==0.0.9
+pydantic==2.9.1
+setuptools==75.2.0
+openai==1.47.1
+anthropic==0.34.2
+lingua-language-detector==2.0.2
+python-dotenv==1.0.1
+fasttext-numpy2==0.10.4
+numpy>=2.0.2,<2.1.0.0
 
 # ========== HTTP 客户端 ==========
 requests>=2.31.0
@@ -17,7 +24,6 @@ urllib3>=2.0.0
 minio>=7.0.0
 
 # ========== 语言检测 ==========
-lingua-language-detector>=2.0.0
 regex
 
 # ========== 深度学习框架 ==========
