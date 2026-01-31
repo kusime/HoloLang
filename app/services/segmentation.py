@@ -2,27 +2,30 @@
 """
 文本分段服务
 
-基于 Lingua 语言检测库和脚本分析，实现多语言文本的自动分段。
+基于 fastText AI 模型和脚本分析，实现多语言文本的自动分段。
 支持中文、英文、日文的混合文本。
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional
 
 import regex as re
-from lingua import Language, LanguageDetectorBuilder
+import fasttext
 
 from app.models.segment import LangCode, SegmentItem, TextIn, TextSegmentsOut
 from app.utils.logging_decorator import log_function
 
-# ---------- 语言检测器（三语） ----------
-DETECTOR = (
-    LanguageDetectorBuilder.from_languages(
-        Language.CHINESE, Language.JAPANESE, Language.ENGLISH
-    )
-    .with_low_accuracy_mode()  # 更快但略微不精确；可去掉此行提高准确率
-    .build()
-)
+# ---------- fastText 语言检测器（AI 驱动）----------
+_FASTTEXT_MODEL: Optional[fasttext.FastText._FastText] = None
+
+def _get_language_model() -> fasttext.FastText._FastText:
+    """获取 fastText 模型（单例模式）"""
+    global _FASTTEXT_MODEL
+    if _FASTTEXT_MODEL is None:
+        model_path = Path(__file__).parent.parent.parent / "models" / "lid.176.bin"
+        _FASTTEXT_MODEL = fasttext.load_model(str(model_path))
+    return _FASTTEXT_MODEL
 
 # ---------- 脚本正则表达式 ----------
 S_HAN = re.compile(r"\p{Script=Han}")
@@ -63,25 +66,83 @@ def _coarse_segments(text: str) -> List[Tuple[int, int]]:
     return segs
 
 
-def _lingua_to_whisper(name: str) -> str:
-    """将 Lingua 语言名转换为 Whisper 语言代码"""
-    u = name.upper()
-    if "CHINESE" in u:
-        return "zh"
-    if "JAPANESE" in u:
-        return "ja"
-    return "en"
+def _fasttext_to_project_lang(label: str) -> str:
+    """
+    将 fastText 标签映射到项目语言代码
+    
+    重要：不直接使用 fastText 的标签，而是映射到项目统一的语言代码系统
+    """
+    # fastText 返回格式: '__label__zh' 或 '__label__ja'
+    lang = label.replace('__label__', '')
+    
+    # 映射表：fastText 标签 → 项目语言代码
+    lang_map = {
+        'ja': 'ja',  # 日语
+        'zh': 'zh',  # 中文
+        'en': 'en',  # 英语
+    }
+    
+    return lang_map.get(lang, 'en')  # 默认英语
 
 
-def _scores(text: str) -> Dict[str, float]:
-    """计算语言置信度分数"""
-    vals = DETECTOR.compute_language_confidence_values(text) or []
-    s = {"zh": 0.0, "ja": 0.0, "en": 0.0}
-    for v in vals:
-        s[_lingua_to_whisper(v.language.name)] = float(v.value)
-    if s["zh"] == s["ja"] == s["en"] == 0.0:  # 超短文本兜底
-        s = {"zh": 1 / 3, "ja": 1 / 3, "en": 1 / 3}
-    return s
+def _detect_language_fasttext(text: str) -> str:
+    """
+    使用 fastText AI 模型检测语言
+    
+    Args:
+        text: 输入文本
+    
+    Returns:
+        项目语言代码 ('zh' | 'ja' | 'en')
+    """
+    # 预处理：移除换行符和多余空格
+    text = text.replace('\n', ' ').strip()
+    
+    if not text:
+        return 'en'
+    
+    # 使用 fastText 检测
+    model = _get_language_model()
+    predictions = model.predict(text, k=1)  # k=1: 只返回最可能的语言
+    
+    # predictions[0] 是 label 列表，predictions[1] 是置信度列表
+    label = predictions[0][0]
+    confidence = float(predictions[1][0])
+    
+    # 映射到项目语言代码
+    lang_code = _fasttext_to_project_lang(label)
+    
+    return lang_code
+
+
+def _scores_fasttext(text: str) -> Dict[str, float]:
+    """
+    使用 fastText 计算语言置信度分数
+    
+    Args:
+        text: 输入文本
+    
+    Returns:
+        语言置信度字典 {'zh': 0.x, 'ja': 0.y, 'en': 0.z'}
+    """
+    text = text.replace('\n', ' ').strip()
+    
+    if not text:
+        return {"zh": 1/3, "ja": 1/3, "en": 1/3}
+    
+    # 获取前 3 个最可能的语言
+    model = _get_language_model()
+    predictions = model.predict(text, k=3)
+    
+    # 初始化分数
+    scores = {"zh": 0.0, "ja": 0.0, "en": 0.0}
+    
+    # 填充分数
+    for label, conf in zip(predictions[0], predictions[1]):
+        lang_code = _fasttext_to_project_lang(label)
+        scores[lang_code] = float(conf)
+    
+    return scores
 
 
 def _is_pure_han(text: str) -> bool:
@@ -104,15 +165,10 @@ def _scores_with_context(
     context_window: int = 15
 ) -> Dict[str, float]:
     """
-    带上下文的语言检测
+    带上下文的语言检测（fastText AI 版本）
     
-    对于纯汉字片段，扩展上下文窗口以利用相邻的假名/字母，
-    避免日语中的汉字被误判为中文。
-    
-    策略：
-    1. 非纯汉字文本 → 直接检测
-    2. 纯汉字 + 上下文有假名 → 扩展上下文检测
-    3. 纯汉字 + 上下文无假名 → 直接检测（可能是中文）
+    对于纯汉字片段，扩展上下文以帮助 AI 判断。
+    fastText 模型本身已经很智能，但提供上下文仍能提升准确度。
     
     Args:
         chunk: 当前片段文本
@@ -126,7 +182,7 @@ def _scores_with_context(
     """
     if not _is_pure_han(chunk):
         # 非纯汉字，直接检测
-        return _scores(chunk)
+        return _scores_fasttext(chunk)
     
     # 纯汉字片段：检查上下文是否有假名
     ctx_start = max(0, start - context_window)
@@ -135,10 +191,10 @@ def _scores_with_context(
     
     # 如果上下文包含假名，很可能是日语
     if _contains_kana(context):
-        return _scores(context)
+        return _scores_fasttext(context)
     else:
-        # 否则可能是纯中文，直接检测片段本身
-        return _scores(chunk)
+        # 否则直接检测片段本身
+        return _scores_fasttext(chunk)
 
 
 @dataclass
@@ -192,7 +248,7 @@ def _smooth_ja_adhesion(
         if mid.lang == "zh" and (mid.end - mid.start) <= max_zh_len:
             if fixed[i - 1].lang == "ja" and fixed[i + 1].lang == "ja":
                 L, R = max(0, mid.start - 8), min(len(text), mid.end + 8)
-                fixed[i] = _Span(mid.start, mid.end, mid.text, "ja", _scores(text[L:R]))
+                fixed[i] = _Span(mid.start, mid.end, mid.text, "ja", _scores_fasttext(text[L:R]))
 
     # 2) 假名牵引
     if kana_pull:
@@ -211,7 +267,7 @@ def _smooth_ja_adhesion(
             )
             if left_ok or right_ok:
                 L, R = max(0, sp.start - 8), min(len(text), sp.end + 8)
-                fixed[i] = _Span(sp.start, sp.end, sp.text, "ja", _scores(text[L:R]))
+                fixed[i] = _Span(sp.start, sp.end, sp.text, "ja", _scores_fasttext(text[L:R]))
     return fixed
 
 

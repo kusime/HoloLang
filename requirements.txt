@@ -54,3 +54,5 @@ click
 # ========== 数据库 (可选) ==========
 SQLAlchemy>=2.0.0
 alembic
+fasttext-wheel
+numpy<2.0
