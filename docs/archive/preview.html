@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>逐字对齐预览</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --fg: #e6ebf0;
+    --muted: #92a2b1;
+    --accent: #5dd6ff;
+    --accent-weak: #2a9fd6;
+    --past: #9fb6c7;
+    --chip: #1a1f26;
+    --card: #11151a;
+    --border: #20262e;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg:#f6f8fa; --fg:#0c1116; --muted:#5b6b79;
+      --accent:#0077ff; --accent-weak:#2a77d6; --past:#637a8c;
+      --chip:#eef2f6; --card:#ffffff; --border:#e5e9ef;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, Segoe UI, Roboto, Noto Sans SC, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+    padding: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.15);
+  }
+  h1 { font-size: 20px; margin: 0 0 12px; font-weight: 700; letter-spacing: .2px; }
+  .controls {
+    display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center;
+  }
+  .grid {
+    display: grid; gap: 12px; margin: 12px 0;
+    grid-template-columns: 1fr;
+  }
+  .chips {
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .chip {
+    background: var(--chip); color: var(--muted); border: 1px solid var(--border);
+    padding: 6px 10px; border-radius: 999px; font-size: 12px;
+  }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  label { font-size: 13px; color: var(--muted); }
+  input[type="number"] {
+    width: 90px; padding: 6px 8px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--chip); color: var(--fg);
+  }
+  input[type="range"] { width: 160px; }
+  select {
+    padding: 6px 8px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--chip); color: var(--fg);
+  }
+  button {
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px;
+    background: var(--chip); color: var(--fg); cursor: pointer;
+  }
+  button:hover { filter: brightness(1.05); }
+  audio { width: 100%; }
+
+  .text {
+    padding: 14px; border: 1px dashed var(--border); border-radius: 12px;
+    background: linear-gradient(180deg, rgba(255,255,255,.02), transparent);
+    max-height: 50vh; overflow: auto; line-height: 2; font-size: 20px;
+    scroll-behavior: smooth;
+  }
+  .char {
+    display: inline;
+    padding: 1px 1px;
+    border-radius: 6px;
+    transition: background-color .08s linear, color .08s linear, transform .08s ease-out;
+    user-select: none;
+    cursor: pointer;
+    white-space: pre-wrap;
+  }
+  .char.space::after { content: "·"; opacity: .25; }
+  .char.space { color: var(--muted); }
+  .char.punct { opacity: .9; }
+  .char.past { color: var(--past); }
+  .char.active {
+    background: color-mix(in hsl, var(--accent) 28%, transparent);
+    color: #fff;
+    transform: translateY(-1px);
+  }
+  .warn {
+    background: #3a1f1f; color: #ffdede; border: 1px solid #6b2b2b;
+    padding: 8px 12px; border-radius: 12px; font-size: 13px; display:none;
+  }
+  .muted { color: var(--muted); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>WhisperX 强制对齐 · 逐字预览</h1>
+
+    <div class="grid">
+      <div class="controls">
+        <audio id="audio" controls preload="metadata" src="final.wav"></audio>
+        <div class="row">
+          <label>偏移(ms)
+            <input id="offset" type="number" value="0" step="5" />
+          </label>
+          <label>速度
+            <input id="speed" type="range" min="0.5" max="2" step="0.05" value="1" />
+          </label>
+          <select id="follow">
+            <option value="center" selected>跟随：居中</option>
+            <option value="near">跟随：就近</option>
+            <option value="off">跟随：关闭</option>
+          </select>
+          <button id="restart">回到开头</button>
+        </div>
+      </div>
+
+      <div id="chips" class="chips">
+        <span class="chip mono" id="statDur">音频时长…</span>
+        <span class="chip mono" id="statChars">字符数…</span>
+        <span class="chip mono" id="statIndex">索引…</span>
+        <span class="chip mono" id="statTime">时间…</span>
+      </div>
+
+      <div id="warn" class="warn"></div>
+
+      <div id="text" class="text" aria-label="逐字高亮文本容器"></div>
+      <div class="muted" style="font-size:13px">
+        点击任意字符可跳播到该字符起始时间。若高亮与听感有轻微偏差，可微调“偏移(ms)”，通常 -80 ~ +120ms 能校平播放器与 ontimeupdate 的延迟。
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(async function() {
+  // --- 1) 加载数据 ---
+  async function fetchText(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("读取失败: " + url);
+    return res.text();
+  }
+  async function fetchJSON(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("读取失败: " + url);
+    return res.json();
+  }
+
+  const [refText, charTs] = await Promise.all([
+    fetchText("text.txt").catch(() => ""),
+    fetchJSON("chars_merged.json")
+  ]);
+
+  const audio = document.getElementById("audio");
+  const offsetEl = document.getElementById("offset");
+  const speedEl = document.getElementById("speed");
+  const followEl = document.getElementById("follow");
+  const textEl = document.getElementById("text");
+  const warnEl = document.getElementById("warn");
+
+  // --- 2) 渲染字符 ---
+  // 如果 JSON 中有空格/换行，可直接渲染；否则以 refText 对齐（以 JSON 为准）
+  const chars = charTs.map(d => d.char);
+  const starts = charTs.map(d => +d.start);
+  const ends   = charTs.map(d => +d.end);
+
+  function escapeCharForDisplay(ch) {
+    // 渲染空格/制表/换行，给视觉提示
+    if (ch === " ") return { text: " ", cls: "space" };
+    if (ch === "\n" || ch === "\r") return { text: "\n", cls: "space" };
+    return { text: ch, cls: /[，。！？、,.!?;:]/.test(ch) ? "punct" : "" };
+  }
+
+  const frag = document.createDocumentFragment();
+  const spans = [];
+  for (let i = 0; i < chars.length; i++) {
+    const span = document.createElement("span");
+    span.className = "char";
+    const { text, cls } = escapeCharForDisplay(chars[i]);
+    if (cls) span.classList.add(cls);
+    span.dataset.index = i;
+    span.dataset.start = starts[i];
+    span.dataset.end = ends[i];
+    span.textContent = text;
+    span.addEventListener("click", () => {
+      const t = starts[i];
+      audio.currentTime = Math.max(0, t - 0.02); // 提前 20ms 以免错过
+      audio.play().catch(()=>{});
+    });
+    spans.push(span);
+    frag.appendChild(span);
+  }
+  textEl.appendChild(frag);
+
+  // --- 3) 一点点健诊 ---
+  const joinedFromJSON = chars.join("");
+  const refNorm = (refText || "").replace(/\s+/g, "");
+  if (refNorm && refNorm !== joinedFromJSON.replace(/\s+/g, "")) {
+    warnEl.style.display = "block";
+    warnEl.textContent = "提示：text.txt 与 char_timestamps.json 字符序列不完全一致（以 JSON 为准进行高亮）。";
+  }
+
+  // --- 4) 控件与状态 ---
+  const statDur   = document.getElementById("statDur");
+  const statChars = document.getElementById("statChars");
+  const statIndex = document.getElementById("statIndex");
+  const statTime  = document.getElementById("statTime");
+  document.getElementById("restart").addEventListener("click", () => { audio.currentTime = 0; });
+
+  speedEl.addEventListener("input", () => { audio.playbackRate = +speedEl.value; });
+  audio.playbackRate = +speedEl.value;
+
+  let duration = 0;
+  audio.addEventListener("loadedmetadata", () => {
+    duration = audio.duration || (ends.length ? ends[ends.length - 1] : 0);
+    statDur.textContent = "音频时长 " + duration.toFixed(3) + " s";
+  });
+
+  statChars.textContent = "字符数 " + chars.length;
+  statIndex.textContent = "索引 -";
+  statTime.textContent  = "时间 -";
+
+  // --- 5) 高亮循环 ---
+  let lastIdx = -1;
+  let rafId = 0;
+
+  function scrollIntoViewSmart(el) {
+    const mode = followEl.value;
+    if (mode === "off" || !el) return;
+    const rect = el.getBoundingClientRect();
+    const host = textEl.getBoundingClientRect();
+    const needs =
+      rect.top < host.top + 24 ||
+      rect.bottom > host.bottom - 24 ||
+      rect.left < host.left + 24 ||
+      rect.right > host.right - 24;
+
+    if (needs) {
+      el.scrollIntoView({ behavior: "smooth", block: mode === "center" ? "center" : "nearest", inline: "nearest" });
+    }
+  }
+
+  function setActive(idx) {
+    if (idx === lastIdx) return;
+    // 清除旧态（只针对相邻附近，避免全量遍历）
+    if (lastIdx >= 0 && lastIdx < spans.length) {
+      spans[lastIdx].classList.remove("active");
+      spans[lastIdx].classList.add("past");
+    }
+    if (idx >= 0 && idx < spans.length) {
+      spans[idx].classList.add("active");
+      scrollIntoViewSmart(spans[idx]);
+      statIndex.textContent = "索引 " + idx;
+    }
+    lastIdx = idx;
+  }
+
+  function findIndexByTime(t) {
+    // 二分找 start<=t<end
+    let lo = 0, hi = starts.length - 1, mid;
+    while (lo <= hi) {
+      mid = (lo + hi) >> 1;
+      if (starts[mid] > t) hi = mid - 1;
+      else lo = mid + 1;
+    }
+    // lo 为第一个 start > t 的位置，候选是 lo-1
+    let idx = lo - 1;
+    if (idx < 0) idx = 0;
+    // 校正：确保 t < end
+    if (ends[idx] <= t && idx + 1 < ends.length) idx++;
+    // 也可能回退
+    while (idx > 0 && starts[idx] > t) idx--;
+    if (t < starts[0]) return -1;
+    if (t >= ends[ends.length - 1]) return ends.length - 1;
+    return idx;
+  }
+
+  function tick() {
+    const off = (+offsetEl.value || 0) / 1000;
+    const t = Math.max(0, audio.currentTime + off);
+    const idx = findIndexByTime(t);
+    setActive(idx);
+    statTime.textContent = "时间 " + t.toFixed(3) + " s";
+    rafId = requestAnimationFrame(tick);
+  }
+
+  function startLoop() {
+    cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(tick);
+  }
+  function stopLoop() {
+    cancelAnimationFrame(rafId);
+  }
+
+  audio.addEventListener("play", startLoop);
+  audio.addEventListener("pause", stopLoop);
+  audio.addEventListener("seeking", () => { /* 让下一帧校正 */ });
+  audio.addEventListener("ended", () => { setActive(spans.length - 1); stopLoop(); });
+
+  // 若用户没点播放，也启动一次以便看见索引变化
+  startLoop();
+
+  // 如果直接用 file:// 打开会被浏览器拦截 fetch；
+  // 稍后提示一次如何本地启服务（只提示，不强制）
+  setTimeout(() => {
+    if (!(duration > 0)) {
+      console.log("如果看不到内容，请用本地 HTTP 服务打开，例如：python3 -m http.server 8000");
+    }
+  }, 1200);
+})();
+</script>
+</body>
+</html>

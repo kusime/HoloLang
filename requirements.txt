@@ -1,0 +1,56 @@
+# HoloLang 项目依赖包
+# 从 holo-align 环境导出，使用兼容版本号
+
+# ========== Web 框架 ==========
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+
+# ========== 数据验证 ==========
+pydantic>=2.0.0
+
+# ========== HTTP 客户端 ==========
+requests>=2.31.0
+aiohttp>=3.9.0
+urllib3>=2.0.0
+
+# ========== S3 存储 ==========
+minio>=7.0.0
+
+# ========== 语言检测 ==========
+lingua-language-detector>=2.0.0
+regex
+
+# ========== 深度学习框架 ==========
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# ========== Whisper 相关 ==========
+whisperx>=3.0.0
+faster-whisper>=1.0.0
+transformers>=4.30.0
+
+# ========== 音频处理 ==========
+soundfile
+pyannote.audio>=3.0.0
+speechbrain>=1.0.0
+
+# ========== 科学计算 ==========
+numpy
+scipy
+pandas
+
+# ========== 机器学习工具 ==========
+lightning
+pytorch-lightning
+
+# ========== 配置管理 ==========
+omegaconf
+PyYAML
+
+# ========== 工具库 ==========
+tqdm
+click
+
+# ========== 数据库 (可选) ==========
+SQLAlchemy>=2.0.0
+alembic
