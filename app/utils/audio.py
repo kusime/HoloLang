@@ -76,3 +76,58 @@ def get_wav_duration(wav_bytes: bytes) -> float:
         nframes = wf.getnframes()
         framerate = wf.getframerate()
         return nframes / float(framerate or 1)
+
+
+def resample_wav_bytes(
+    wav_bytes: bytes,
+    target_sr: int,
+    target_channels: int = 1,
+    target_width: int = 2
+) -> bytes:
+    """
+    重采样 WAV 音频到指定参数
+    
+    使用 torchaudio 进行高质量重采样
+    
+    Args:
+        wav_bytes: 输入 WAV 字节
+        target_sr: 目标采样率
+        target_channels: 目标声道数
+        target_width: 目标位宽（字节），目前仅支持 2 (16-bit PCM)
+        
+    Returns:
+        重采样后的 WAV 字节
+    """
+    import torch
+    import torchaudio
+    import io
+    
+    # 读取音频
+    bio = io.BytesIO(wav_bytes)
+    waveform, src_sr = torchaudio.load(bio)
+    
+    # 1. 声道处理
+    if waveform.shape[0] != target_channels:
+        if target_channels == 1:
+            # 多转单：平均
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+        elif target_channels == 2:
+            # 单转多：复制
+            waveform = waveform.repeat(2, 1)
+            
+    # 2. 重采样
+    if src_sr != target_sr:
+        resampler = torchaudio.transforms.Resample(orig_freq=src_sr, new_freq=target_sr)
+        waveform = resampler(waveform)
+        
+    # 3. 导出为 WAV bytes
+    out_bio = io.BytesIO()
+    torchaudio.save(
+        out_bio, 
+        waveform, 
+        target_sr, 
+        encoding="PCM_S", 
+        bits_per_sample=target_width * 8,
+        format="wav"
+    )
+    return out_bio.getvalue()

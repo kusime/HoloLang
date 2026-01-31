@@ -18,10 +18,9 @@ from app.models.pipeline import PipelineOutput
 from app.models.segment import TextIn, TextSegmentsOut
 from app.models.tts import TTSConfig
 from app.services.segmentation import segment_text
-from app.utils.audio import concat_wav_frames, read_wav_params_and_frames
+from app.utils.audio import concat_wav_frames, read_wav_params_and_frames, resample_wav_bytes
+
 from app.utils.logging_decorator import log_function
-
-
 
 
 @log_function()
@@ -67,13 +66,30 @@ def run_pipeline(
 
         # --- 2.1.1 解析参数/帧/时长，并校验参数一致 ---
         params, frames, seg_duration = read_wav_params_and_frames(seg_wav_bytes)
+        
         if params_ref is None:
             params_ref = params
         elif params != params_ref:
-            raise RuntimeError(
-                f"WAV 参数不一致，无法合并：first={params_ref}, current={params} (segment index={idx}, lang={seg.langcode})\n"
-                "请确保 TTS 输出统一声道/位宽/采样率（或先重采样再合并）。"
+            # 参数不一致（通常是采样率不同），进行重采样
+            target_nch, target_width, target_sr = params_ref
+            
+            # 使用 torchaudio 进行重采样
+            seg_wav_bytes = resample_wav_bytes(
+                seg_wav_bytes, 
+                target_sr=target_sr,
+                target_channels=target_nch,
+                target_width=target_width
             )
+            
+            # 重新解析参数（确认一致）
+            params, frames, seg_duration = read_wav_params_and_frames(seg_wav_bytes)
+            
+            if params != params_ref:
+                # 如果重采样后仍然不一致（极少见），则抛出异常
+                raise RuntimeError(
+                    f"WAV 参数不一致，重采样失败：first={params_ref}, current={params}"
+                )
+        
         frames_list.append(frames)
 
         # --- 2.2 WhisperX 单语种对齐（段内时间） ---
