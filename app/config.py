@@ -56,6 +56,7 @@ WHISPERX_DEVICE = _env("WHISPERX_DEVICE", "auto")  # auto/cpu/cuda
 
 # ========== S3 配置 ==========
 S3_ENDPOINT = _env("S3_ENDPOINT", "localhost:9000")
+S3_PUBLIC_URL = _env("S3_PUBLIC_URL", "")  # 默认为空，自动检测
 S3_ACCESS_KEY = _env("S3_ACCESS_KEY", "admin")
 S3_SECRET_KEY = _env("S3_SECRET_KEY", "change_this_strong_password")
 S3_BUCKET = _env("S3_BUCKET", "tts-pipeline")
