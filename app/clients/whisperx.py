@@ -76,11 +76,6 @@ class WhisperXSingleClient:
     def __init__(self, device: Optional[str] = None):
         self.device = pick_device(device)
         self.cache = AlignModelCache(self.device)
-        
-        # 设置 Hugging Face 离线模式优先（如果模型已下载，避免在线检查）
-        import os
-        os.environ.setdefault("HF_HUB_OFFLINE", "0")  # 允许下载但优先本地
-        os.environ.setdefault("TRANSFORMERS_OFFLINE", "0")
 
     @log_function()
     def align(

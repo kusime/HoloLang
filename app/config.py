@@ -1,11 +1,22 @@
-# -*- coding utf-8 -*-
+# -*- coding: utf-8 -*-
 """
-统一配置管理
+应用配置
 
-从环境变量读取所有配置项，提供默认值和类型转换。
+从环境变量读取配置项
 """
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 加载 .env 文件
+load_dotenv()
+
+# ========== 设置 Hugging Face 缓存（必须在导入任何 transformers 相关库之前）==========
+os.environ.setdefault("HF_HOME", os.getenv("HF_HOME", "./.cache/huggingface"))
+os.environ.setdefault("TRANSFORMERS_CACHE", os.getenv("TRANSFORMERS_CACHE", "./.cache/huggingface/transformers"))
+os.environ.setdefault("HF_HUB_OFFLINE", "0")  # 允许在线下载但优先本地
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "0")
 
 
 def _env(name: str, default: str) -> str:
