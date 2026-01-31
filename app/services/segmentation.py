@@ -252,18 +252,28 @@ class _Span:
     scores: Dict[str, float]
 
 
-def _merge_adjacent(spans: List[_Span]) -> List[_Span]:
-    """合并相邻的同语言段落"""
+def _merge_adjacent(spans: List[_Span], max_len: int = 200) -> List[_Span]:
+    """
+    合并相邻的同语言段落
+    
+    Args:
+        spans: 片段列表
+        max_len: 合并后的最大长度限制（防止过长导致 WhisperX 对齐失败）
+    """
     out: List[_Span] = []
     for sp in spans:
         if out and out[-1].lang == sp.lang and out[-1].end == sp.start:
-            a = out[-1]
-            L1, L2 = a.end - a.start, sp.end - sp.start
-            total = L1 + L2 or 1
-            mix = {k: (a.scores[k] * L1 + sp.scores[k] * L2) / total for k in a.scores}
-            out[-1] = _Span(a.start, sp.end, a.text + sp.text, sp.lang, mix)
-        else:
-            out.append(sp)
+            # 检查合并后长度是否超过限制
+            if len(out[-1].text) + len(sp.text) <= max_len:
+                a = out[-1]
+                L1, L2 = a.end - a.start, sp.end - sp.start
+                total = L1 + L2 or 1
+                mix = {k: (a.scores[k] * L1 + sp.scores[k] * L2) / total for k in a.scores}
+                out[-1] = _Span(a.start, sp.end, a.text + sp.text, sp.lang, mix)
+                continue
+        
+        # 无法合并（语言不同、不连续、或超长），添加为新段
+        out.append(sp)
     return out
 
 
