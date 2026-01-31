@@ -52,86 +52,45 @@ def _script_bucket(ch: str) -> str:
 
 def _split_by_punctuation(text: str) -> List[Tuple[int, int]]:
     """
-    基于标点符号分割句子边界（第一级分段）
+    基于Regex的标点强行分割（Step 1: Punctuation-based Hard Split）
     
-    策略：
-    1. **主分隔符**（句号）：必定分割
-    2. **潜在分隔符**（逗号）：当前后脚本不同时分割
+    不再依赖脚本判断，而是对所有标点符号进行切分，
+    然后依靠后续的"Isolated Detection"和合并逻辑来恢复句子。
     
-    解决问题：避免跨句子边界的语言误判
-    例如："...greeting me. 它会告诉我..." 
-         → 在句号处分割
-    例如："它会告诉我...，そして..." 
-         → 在逗号处分割（汉字 vs 假名）
-    
-    Args:
-        text: 输入文本
-    
-    Returns:
-        句子片段的 (start, end) 列表
+    涵盖符号：
+    - 主分隔符：. 。 ! ！ ? ？
+    - 逗号系：, ， 、 (全覆盖)
     """
     if not text:
         return []
-    
-    # 主分隔符（句子结束）
-    primary_delimiters = {
-        '。', '！', '？',  # 中文
-        '.', '!', '?',    # 英文
-        '．', '！', '？'  # 日文全角
-    }
-    
-    # 次级分隔符（可能是语言边界）
-    secondary_delimiters = {
-        '，', '、',       # 中文逗号、顿号
-        ',',             # 英文逗号
-        '，'             # 日文全角逗号
-    }
+        
+    # 定义分隔符正则表达式（包含全角/半角标点）
+    pattern = re.compile(r'([。！？.!?，、,]+)')
     
     segments = []
     start = 0
     
-    for i, ch in enumerate(text):
-        should_split = False
-        
-        # 主分隔符：总是分割
-        if ch in primary_delimiters:
-            should_split = True
-        
-        # 次级分隔符：检查前后脚本是否不同
-        elif ch in secondary_delimiters and i + 1 < len(text):
-            # 检查逗号后的字符
-            next_ch = text[i + 1]
-            
-            # 跳过空格
-            j = i + 1
-            while j < len(text) and text[j].isspace():
-                j += 1
-            
-            if j < len(text):
-                next_ch = text[j]
-                current_bucket = _script_bucket(text[i - 1] if i > 0 else ' ')
-                next_bucket = _script_bucket(next_ch)
-                
-                # 如果逗号前后脚本类型不同，且都不是NEUTRAL，则分割
-                if (current_bucket != next_bucket and 
-                    current_bucket != "NEUTRAL" and 
-                    next_bucket != "NEUTRAL"):
-                    should_split = True
-        
-        if should_split:
-            end = i + 1
-            seg_text = text[start:end].strip()
-            if seg_text:
-                segments.append((start, end))
-            start = end
+    # split 会返回 [chunk, delimiter, chunk, delimiter, ...]
+    # 我们需要保留原始位置信息，所以最好用 scanner 或 finditer
+    # 简单的做法：找到所有分隔符位置，构建片段
     
-    # 处理最后一段
+    for match in pattern.finditer(text):
+        token_start, token_end = match.span()
+        
+        # 分隔符前面的文本块（如果非空）
+        if token_start > start:
+            segments.append((start, token_start))
+            
+        # 分隔符本身也作为一个块（便于保留标点）
+        segments.append((token_start, token_end))
+        
+        start = token_end
+        
+    # 处理剩余文本
     if start < len(text):
-        seg_text = text[start:].strip()
-        if seg_text:
-            segments.append((start, len(text)))
-    
-    return segments if segments else [(0, len(text))]
+        segments.append((start, len(text)))
+        
+    return segments
 
 
 def _coarse_segments(text: str) -> List[Tuple[int, int]]:
@@ -221,10 +180,11 @@ def _scores_fasttext(text: str) -> Dict[str, float]:
     # 初始化分数
     scores = {"zh": 0.0, "ja": 0.0, "en": 0.0}
     
-    # 填充分数
+    # 填充分数 (累加，防止被后续低置信度的同类覆盖)
+    # 例如：如果 return 'de' (mappted to en) 和 'en'，应该累加
     for label, conf in zip(predictions[0], predictions[1]):
         lang_code = _fasttext_to_project_lang(label)
-        scores[lang_code] = float(conf)
+        scores[lang_code] += float(conf)
     
     return scores
 
@@ -372,43 +332,58 @@ def _segment_text_pure(
         max_zh_len: 日语粘合修正的最大中文段长度
         kana_pull: 是否启用假名牵引修正
     """
-    # ========== 第一级：标点符号分割 ==========
-    sentence_segments = _split_by_punctuation(text)
+    # ========== 第一级：标点符号分割 (Aggressive Punctuation Split) ==========
+    # 用户要求：包含 , ， 、 等所有逗号
+    chunk_segments = _split_by_punctuation(text)
     
     all_spans: List[_Span] = []
     
-    # 对每个句子片段进行第二级处理
-    for sent_start, sent_end in sentence_segments:
-        sentence = text[sent_start:sent_end]
+    # 对每个标点切分的大块直接进行语言检测 (Step 2: Language Detection Priority)
+    for chunk_start, chunk_end in chunk_segments:
+        chunk_text = text[chunk_start:chunk_end]
         
-        # ========== 第二级：脚本切换 + AI 检测 ==========
-        spans: List[_Span] = []
-        for s, e in _coarse_segments(sentence):
-            chunk = sentence[s:e]
+        if not chunk_text.strip():
+            continue
             
-            # 计算在原始文本中的位置
-            abs_start = sent_start + s
-            abs_end = sent_start + e
-            
-            # 使用 fastText AI 检测（带上下文）
-            scores = _scores_with_context(chunk, abs_start, abs_end, text)
-            lang = max(scores.items(), key=lambda kv: kv[1])[0]
-            
-            spans.append(_Span(abs_start, abs_end, chunk, lang, scores))
+        # 计算位置
+        abs_start = chunk_start
+        abs_end = chunk_end
         
-        # 句内合并同语
-        spans = _merge_adjacent(spans)
+        # --- 策略：Heuristic Detection (Kana > Han > Other) ---
+        # 针对整个标点片段进行判断，保证 "距離も" 这种 "汉字+假名" 组合被整体识别为日语
         
-        # 句内日语粘合修正
-        spans = _smooth_ja_adhesion(spans, text, max_zh_len, kana_pull)
+        lang = "en"
+        scores = {"zh": 0.0, "ja": 0.0, "en": 0.0}
         
-        # 再次合并
-        spans = _merge_adjacent(spans)
-        
-        all_spans.extend(spans)
+        if _contains_kana(chunk_text):
+            # Priority 1: IF contains Japanese Kana -> JA
+            lang = "ja"
+            scores["ja"] = 1.0
+        elif S_HAN.search(chunk_text):
+            # Priority 2: IF contains Hanzi but NO Kana -> ZH
+            lang = "zh"
+            scores["zh"] = 1.0
+        else:
+            # Priority 3: ELSE -> EN/Other (Recourse to simple script check or fastText)
+            # 简单起见，如果含拉丁字母则 EN，否则尝试 fastText
+            if S_LATIN.search(chunk_text):
+                lang = "en"
+                scores["en"] = 1.0
+            else:
+                s = _scores_fasttext(chunk_text)
+                lang = max(s.items(), key=lambda kv: kv[1])[0]
+                scores = s
+
+        all_spans.append(_Span(abs_start, abs_end, chunk_text, lang, scores))
     
-    # 全局最后一次合并（跨句子边界的相同语言）
-    return _merge_adjacent(all_spans)
+    # 3. 全局合并
+    merged_spans = _merge_adjacent(all_spans)
+    
+    # 4. 日语粘合修正 (此时主要用于修正被标点切断的短汉字段，如果有上下文支持的话)
+    final_spans = _smooth_ja_adhesion(merged_spans, text, max_zh_len, kana_pull)
+    
+    # 5. 最后再一次合并
+    return _merge_adjacent(final_spans)
 
 
 # ---------- 公开 API ----------

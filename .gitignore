@@ -3,3 +3,4 @@ minio/
 *.pyc
 .envmodels/
 .cache/
+models/lid.176.bin
