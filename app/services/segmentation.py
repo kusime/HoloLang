@@ -84,6 +84,63 @@ def _scores(text: str) -> Dict[str, float]:
     return s
 
 
+def _is_pure_han(text: str) -> bool:
+    """检查是否为纯汉字文本（忽略标点和空格）"""
+    has_han = False
+    for ch in text:
+        if S_HAN.match(ch):
+            has_han = True
+        elif not (S_PUNC.match(ch) or ch.isspace()):
+            # 发现非汉字、非标点、非空格的字符
+            return False
+    return has_han
+
+
+def _scores_with_context(
+    chunk: str,
+    start: int,
+    end: int,
+    full_text: str,
+    context_window: int = 15
+) -> Dict[str, float]:
+    """
+    带上下文的语言检测
+    
+    对于纯汉字片段，扩展上下文窗口以利用相邻的假名/字母，
+    避免日语中的汉字被误判为中文。
+    
+    策略：
+    1. 非纯汉字文本 → 直接检测
+    2. 纯汉字 + 上下文有假名 → 扩展上下文检测
+    3. 纯汉字 + 上下文无假名 → 直接检测（可能是中文）
+    
+    Args:
+        chunk: 当前片段文本
+        start: 片段在全文中的起始位置
+        end: 片段在全文中的结束位置
+        full_text: 完整文本
+        context_window: 上下文扩展窗口大小（字符数）
+    
+    Returns:
+        语言置信度分数字典
+    """
+    if not _is_pure_han(chunk):
+        # 非纯汉字，直接检测
+        return _scores(chunk)
+    
+    # 纯汉字片段：检查上下文是否有假名
+    ctx_start = max(0, start - context_window)
+    ctx_end = min(len(full_text), end + context_window)
+    context = full_text[ctx_start:ctx_end]
+    
+    # 如果上下文包含假名，很可能是日语
+    if _contains_kana(context):
+        return _scores(context)
+    else:
+        # 否则可能是纯中文，直接检测片段本身
+        return _scores(chunk)
+
+
 @dataclass
 class _Span:
     """内部分段表示"""
@@ -159,26 +216,32 @@ def _smooth_ja_adhesion(
 
 
 def _segment_text_pure(
-    text: str, max_zh_len: int = 3, kana_pull: bool = True
+    text: str, max_zh_len: int = 6, kana_pull: bool = True
 ) -> List[_Span]:
-    """执行完整的文本分段流程"""
-    # 1) 粗分 + Lingua 判定
+    """
+    执行完整的文本分段流程
+    
+    Args:
+        text: 输入文本
+        max_zh_len: 日语粘合修正的最大中文段长度（提高到 6 以覆盖更多汉字词组）
+        kana_pull: 是否启用假名牵引修正
+    """
+    # 1) 粗分 + Lingua 判定（带上下文）
     spans: List[_Span] = []
     for s, e in _coarse_segments(text):
         chunk = text[s:e]
-        scores = _scores(chunk)
+        scores = _scores_with_context(chunk, s, e, text)  # 使用上下文检测
         lang = max(scores.items(), key=lambda kv: kv[1])[0]
         spans.append(_Span(s, e, chunk, lang, scores))
 
     # 2) 合并同语
     spans = _merge_adjacent(spans)
 
-    # 3) 日语黏合修正
-    spans = _smooth_ja_adhesion(spans, text, max_zh_len=max_zh_len, kana_pull=kana_pull)
+    # 3) 日语粘合修正（作为兜底机制）
+    spans = _smooth_ja_adhesion(spans, text, max_zh_len, kana_pull)
 
-    # 4) 再合并一次
-    spans = _merge_adjacent(spans)
-    return spans
+    # 4) 再次合并
+    return _merge_adjacent(spans)
 
 
 # ---------- 公开 API ----------
